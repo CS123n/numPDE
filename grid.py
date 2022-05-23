@@ -40,13 +40,13 @@ def condition(n, device):  # n-1*n-1
 
 class Transform():
     def __init__(self, device):
-        self.cov_l = th.nn.Conv2d(1, 1, kernel_size=3, stride=1, padding=1, bias=False, device=device)
+        self.cov_l = th.nn.Conv2d(1, 1, kernel_size=3, padding=1, bias=False, device=device)
         weight = th.tensor([[[[0, -1, 0], [-1, 4, -1], [0, -1, 0]]]], dtype=th.float, device=device)
         self.cov_l.weight = th.nn.Parameter(weight)
 
         self.w = 2.0 / 3
         self.diag = weight[..., 1, 1]
-        self.cov_s = th.nn.Conv2d(1, 1, kernel_size=3, stride=1, padding=1, bias=False, device=device)
+        self.cov_s = th.nn.Conv2d(1, 1, kernel_size=3, padding=1, bias=False, device=device)
         weight, weight[..., 1, 1] = - weight / self.diag, 0
         self.cov_s.weight = th.nn.Parameter(weight)
 
@@ -54,7 +54,7 @@ class Transform():
         weight = 0.125 * th.tensor([[[[0, 1, 0], [1, 4, 1], [0, 1, 0]]]], device=device)  # attention!
         self.cov_r.weight = th.nn.Parameter(weight)  
 
-        self.cov_i = th.nn.Conv2d(1, 1, kernel_size=2, bias=False, device=device)
+        self.cov_i = th.nn.Conv2d(1, 1, kernel_size=2, padding=1, bias=False, device=device)
         self.cov_i.weight = th.nn.Parameter(0.25 * th.ones(1, 1, 2, 2, device=device))
 
         self.ones = th.ones(2, 2, device=device)
@@ -77,8 +77,8 @@ class Transform():
     @ th.no_grad()
     def interpolation(self, u, n):  # n/2-1*n/2-1 -> n-1*n-1
         u = th.kron(u.view(n//2-1, n//2-1), self.ones)
-        u = F.pad(u, (1, 1, 1, 1), 'constant', 0)  # mpi
-        return self.cov_i(u.view(1, 1, n, n)).view(-1)
+        # u = F.pad(u, (1, 1, 1, 1), 'constant', 0)  # mpi
+        return self.cov_i(u.view(1, 1, n-2, n-2)).view(-1)
 
 
 # # cov_c = th.nn.Conv2d(1, 1, kernel_size=3, stride=1, bias=False)
