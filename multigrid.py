@@ -1,33 +1,34 @@
 import torch as th
 
-from smooth import smooth
-from grid import laplace, Transform
+# from smooth import smooth
+from grid import Transform
+
 
 class MultiGrid():
-    def __init__(self, n, device):
-        self.A, self.n = laplace(n, device), n
-        self.smooth_method = {item: smooth(self.A[item]) for item in self.A}
+    def __init__(self, device):
+        # self.A, self.n = laplace(n, device), n
+        # self.smooth_method = {item: smooth(self.A[item]) for item in self.A}
         self.transform = Transform(device)
 
     def __call__(self, u, f, m1=1, m2=1, n=None):
         return self.compute(u, f, m1=m1, m2=m2, n=n)
 
-    def compute(self, u, f, m1, m2, n=None):
-        A, n = self.A[n], n if n else self.n
-        smooth_method = self.smooth_method[n]
+    def compute(self, u, f, m1, m2, n):
+        tran = self.transform
+        n = n if n else self.n
 
-        u = smooth_method(u, f, m1)
+        u = tran.smooth(u, f, m1, n)
         if n == 4:
             # return th.inverse(A) @ f  # better?
-            u = smooth_method(u, f, m2)
+            u = tran.smooth(u, f, m2, n)
             return u
 
-        r = f - A @ u
-        r2 = self.transform.restriction(r, n)
+        r = f - tran.laplace(u, n)
+        r2 = tran.restriction(r, n)
         e2 = self.compute(th.zeros_like(r2), r2, m1=m1, m2=m2, n=n//2)  # attention!
         # print(n, e2.shape, u.shape)
-        u = u + self.transform.interpolation(e2, n)
-        u = smooth_method(u, f, m2)
+        u = u + tran.interpolation(e2, n)
+        u = tran.smooth(u, f, m2, n)
 
         return u
 
@@ -36,7 +37,7 @@ class FullMultiGrid(MultiGrid):
     def __call__(self, f, m1=1, m2=1, n=None, r=20):
         return self.compute_full(f, m1, m2, n=n, r=r)
 
-    def compute_full(self, f, m1, m2, n=None, r=20):
+    def compute_full(self, f, m1, m2, n, r=20):
         n = n if n else self.n
         if n == 4:
             return self.compute(th.zeros_like(f), f, m1=m1, m2=m2, n=n)

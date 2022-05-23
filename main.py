@@ -18,18 +18,10 @@ if __name__ == "__main__":
     device = th.device(args.device)
     
     start = time.time()
-    A = laplace(n, device)[n]
-    MG_method = MultiGrid(n, device)
-    b_method = condition(n, device)
-    b, u_t = b_method(origin_func, target_func)  # condition(origin_func)
+    MG_method = MultiGrid(device)
+    cond_method = condition(n, device)
+    b, u_t = cond_method(origin_func, target_func)  # condition(origin_func)
     print(time.time() - start)
-
-    # start = time.time()
-    # # u_c = th.inverse(A) @ b
-    # u_c = th.linalg.solve(A, b)
-    # print(time.time() - start)
-    
-    # print(th.norm(u_c - u_t).item())
 
     start = time.time()
     u = th.zeros((n-1)**2, device=device)
@@ -39,14 +31,12 @@ if __name__ == "__main__":
         u_list.append(u)
     print(time.time() - start)
 
-    # print(u_t.view(n-1, n-1))
     e_list = [th.norm(u_list[i] - u_t) for i in range(len(u_list))]
-    o_list = [th.log2(e_list[i]) - th.log2(e_list[i+1]) for i in range(len(e_list)-1)]
     print(e_list)
-    print(o_list)
+    # o_list = [th.log2(e_list[i]) - th.log2(e_list[i+1]) for i in range(len(e_list)-1)]
+    # print(o_list)
 
     # print(u_c.view(n-1, n-1))
-
 
     # method = FullMultiGrid(n)
     # u = method(b, n=n)

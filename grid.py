@@ -40,9 +40,19 @@ def condition(n, device):  # n-1*n-1
 
 class Transform():
     def __init__(self, device):
+        self.cov_l = th.nn.Conv2d(1, 1, kernel_size=3, stride=1, padding=1, bias=False, device=device)
+        weight = th.tensor([[[[0, -1, 0], [-1, 4, -1], [0, -1, 0]]]], dtype=th.float, device=device)
+        self.cov_l.weight = th.nn.Parameter(weight)
+
+        self.w = 2.0 / 3
+        self.diag = weight[..., 1, 1]
+        self.cov_s = th.nn.Conv2d(1, 1, kernel_size=3, stride=1, padding=1, bias=False, device=device)
+        weight, weight[..., 1, 1] = - weight / self.diag, 0
+        self.cov_s.weight = th.nn.Parameter(weight)
+
         self.cov_r = th.nn.Conv2d(1, 1, kernel_size=3, stride=2, bias=False, device=device)
-        weight = 0.125 * th.tensor([[[[0, 1, 0], [1, 4, 1], [0, 1, 0]]]], device=device)
-        self.cov_r.weight = th.nn.Parameter(weight)  # attention!
+        weight = 0.125 * th.tensor([[[[0, 1, 0], [1, 4, 1], [0, 1, 0]]]], device=device)  # attention!
+        self.cov_r.weight = th.nn.Parameter(weight)  
 
         self.cov_i = th.nn.Conv2d(1, 1, kernel_size=2, bias=False, device=device)
         self.cov_i.weight = th.nn.Parameter(0.25 * th.ones(1, 1, 2, 2, device=device))
@@ -50,13 +60,22 @@ class Transform():
         self.ones = th.ones(2, 2, device=device)
 
     @ th.no_grad()
+    def laplace(self, u, n):  # n-1*n-1 -> n-1*n-1
+        return self.cov_l(u.view(1, 1, n-1, n-1)).view(-1) * n ** 2
+
+    @ th.no_grad()
+    def smooth(self, u, b, m, n):  # n-1*n-1 -> n-1*n-1
+        for _ in range(m):
+            u_ = self.cov_s(u.view(1, 1, n-1, n-1)).view(-1) + b / (n ** 2 * self.diag)
+            u = self.w * u_ + (1 - self.w) * u.view(-1)
+        return u
+
+    @ th.no_grad()
     def restriction(self, u, n):  # n-1*n-1 -> n/2-1*n/2-1
-        # n = u.shape[0] + 1
         return self.cov_r(u.view(1, 1, n-1, n-1)).view(-1)
 
     @ th.no_grad()
     def interpolation(self, u, n):  # n/2-1*n/2-1 -> n-1*n-1
-        # n = (u.shape[0] + 1) * 2
         u = th.kron(u.view(n//2-1, n//2-1), self.ones)
         u = F.pad(u, (1, 1, 1, 1), 'constant', 0)  # mpi
         return self.cov_i(u.view(1, 1, n, n)).view(-1)
@@ -77,18 +96,56 @@ class Transform():
 
 if __name__ == "__main__":
     n = 4
+    device = th.device('cpu')
+    A = laplace(n, device)[n]
+    transform = Transform(device)
 
-    # print(laplace(n))
-    # print('------------------------------------------------')
+    v = th.rand((n-1)**2)
+    v1 = A @ v
+    print(v1.view(n-1, n-1))
 
-    v = th.tensor([[1, 2, 3], [2, 3, 4], [3, 4, 5]])
-    print(v, v.shape)
+    v2 = transform.laplace(v, n)
+    print(v2.view(n-1, n-1))
 
-    v = interpolation(v, 2*n)
-    print(v.view(2*n-1, 2*n-1), v.shape)
+    print((v1 - v2).view(n-1, n-1))
 
-    v = restriction(v, 2*n)
-    print(v, v.shape)
+    print('------------------------------------------------')
+
+    from smooth import separate, smooth
+
+    smooth_method = smooth(A)
+    b = th.rand((n-1)**2)
+
+    D, L, U = separate(A)
+    T = (1 / D) * (L + U)
+    print(T)
+    print((1 / D), b, D)
+
+    v1 = T @ v.view(-1) + (1 / D) * b
+    v1 = 2.0 / 3 * v1 + 1.0 / 3 * v
+    print(v1.view(n-1, n-1))
+
+    v2 = smooth_method(v, b, 1)
+    print(v2.view(n-1, n-1))
+
+    v3 = transform.smooth(v, b, 1, n)
+    print(v3.view(n-1, n-1))
+
+    # print((v1 - v2).view(n-1, n-1))
+
+    print('------------------------------------------------')
+
+    # v = th.tensor([[1, 2, 3], [2, 3, 4], [3, 4, 5]], dtype=th.float)
+    # print(v, v.shape)
+
+    # v_ = transform.laplace(v, n)
+    # print(v_, v_.shape)
+
+    # v = transform.interpolation(v, 2*n)
+    # print(v.view(2*n-1, 2*n-1), v.shape)
+
+    # v = transform.restriction(v, 2*n)
+    # print(v, v.shape)
 
     # v = interpolation(v, n)
     # print(v, v.shape)

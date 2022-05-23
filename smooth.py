@@ -10,9 +10,6 @@ def smooth(A, w=2.0/3, type='jacobi'):
     if type == 'jacobi':
         Di = (1 / D)
         T, c_ = Di * (L + U), lambda b: Di * b
-    # elif type == 'gauss_seidel':  # todo
-    #     DLi = th.inverse(th.diag_embed(D) - L)
-    #     T, c_ = DLi @ (L + U), lambda b: DLi @ b
     else:
         T, c_ = None, None
 
@@ -27,7 +24,7 @@ def smooth(A, w=2.0/3, type='jacobi'):
 if __name__ == "__main__":
     from grid import tridiag
 
-    n = 16
+    n = 4
     A, b = tridiag(-1, 2, -1, n, device='cpu'), th.randn(n)
     x = th.inverse(A) @ b
 
