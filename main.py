@@ -1,8 +1,11 @@
 import torch as th
+import torch.distributed as dist
 import argparse
 import time
+import sys
+import os
 
-from grid import laplace, condition
+from grid import condition, Transform, Transform_v2
 from multigrid import MultiGrid, FullMultiGrid
 from input.func import origin_func, target_func
 from smooth import smooth
@@ -11,28 +14,40 @@ from smooth import smooth
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--n', '-n', type=int, default=16)
+    parser.add_argument('--p', '-p', type=int, default=1)
     parser.add_argument('--device', type=str, default='cpu')
     args = parser.parse_args()
 
-    n = args.n
+    n, p = args.n // args.p, args.p
     device = th.device(args.device)
+    rank = os.environ.get("LOCAL_RANK")
+    rank = 0 if rank is None else int(rank)
+    index = th.tensor([rank % p, rank // p], device=device)
+    if p > 1:
+        assert p ** 2 == int(os.environ.get("WORLD_SIZE"))
+        dist.init_process_group(backend='gloo')
     
     start = time.time()
-    MG_method = MultiGrid(device)
-    cond_method = condition(n, device)
-    b, u_t = cond_method(origin_func, target_func)  # condition(origin_func)
+    MG_method = MultiGrid(index, p, device)
+    cond_method = condition(n, index, p, device)
+    b = cond_method(origin_func, target_func)  # condition(origin_func)
     print(time.time() - start)
 
     start = time.time()
-    u = th.zeros((n-1)**2, device=device)
+    w = n - 1 if p == 1 else n
+    u = th.zeros((w)**2, device=device)
+    
     u_list = []
-    for _ in range(20):
+    for _ in range(5):
         u = MG_method(u, b, n=n)
         u_list.append(u)
     print(time.time() - start)
 
-    e_list = [th.norm(u_list[i] - u_t) for i in range(len(u_list))]
-    print(e_list)
+    if rank == 0:
+        print(u.view(w, w)[:8, :8])
+
+    # e_list = [th.norm(u_list[i] - u_t) for i in range(len(u_list))]
+    # print(e_list)
     # o_list = [th.log2(e_list[i]) - th.log2(e_list[i+1]) for i in range(len(e_list)-1)]
     # print(o_list)
 

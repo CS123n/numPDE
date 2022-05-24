@@ -1,14 +1,17 @@
 import torch as th
 
 # from smooth import smooth
-from grid import Transform
+from grid import Transform, Transform_v2
 
 
 class MultiGrid():
-    def __init__(self, device):
+    def __init__(self, index, p, device):
         # self.A, self.n = laplace(n, device), n
         # self.smooth_method = {item: smooth(self.A[item]) for item in self.A}
-        self.transform = Transform(device)
+        if p > 1:
+            self.transform = Transform_v2(index, p, device)
+        else:
+            self.transform = Transform(device)
 
     def __call__(self, u, f, m1=1, m2=1, n=None):
         return self.compute(u, f, m1=m1, m2=m2, n=n)
@@ -26,7 +29,6 @@ class MultiGrid():
         r = f - tran.laplace(u, n)
         r2 = tran.restriction(r, n)
         e2 = self.compute(th.zeros_like(r2), r2, m1=m1, m2=m2, n=n//2)  # attention!
-        # print(n, e2.shape, u.shape)
         u = u + tran.interpolation(e2, n)
         u = tran.smooth(u, f, m2, n)
 
