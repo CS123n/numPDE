@@ -4,21 +4,7 @@ import torch.distributed as dist
 # from functorch import vmap
 import time
 import sys
-
-
-def tridiag(a, b, c, n, device):  # n^2*n^2
-    return th.diag_embed(th.ones(n-1, device=device), -1) * a + th.diag_embed(th.ones(n, device=device), 0) * b + \
-        th.diag_embed(th.ones(n-1, device=device), 1) * c
-
-
-def laplace(n, device):  # {h: n-1^2*n-1^2}
-    A_dict, i = {}, 4
-    while i <= n:
-        T, I, B = tridiag(-1, 4, -1, i-1, device), th.eye(i-1, device=device), tridiag(-1, 0, -1, i-1, device)
-        A = th.kron(I, T) + th.kron(B, I)
-        A_dict[i] = A * i ** 2  # attention!
-        i = i * 2
-    return A_dict
+import os
 
 
 def condition(n, index, p, device):  # n-1*n-1
@@ -42,8 +28,8 @@ def condition(n, index, p, device):  # n-1*n-1
     else:
         direction = index < p // 2
         x_ = th.linspace(0, 1, n*p+1, device=device)
-        gridx, gridy = th.meshgrid(x_[direction[0]+index[0]*n:direction[0]+(index[0]+1)*n], 
-                                   x_[direction[1]+index[1]*n:direction[1]+(index[1]+1)*n], indexing='ij')
+        gridx, gridy = th.meshgrid(x_[direction[0]+index[0]*n:direction[0]+index[0]*n+n], 
+                                   x_[direction[1]+index[1]*n:direction[1]+index[1]*n+n], indexing='ij')
         
         @ th.no_grad()
         def method(origin_func, target_func):
@@ -61,6 +47,7 @@ def condition(n, index, p, device):  # n-1*n-1
 
             return b.view(-1)
         return method
+
 
 class Transform():
     def __init__(self, device):
@@ -105,94 +92,19 @@ class Transform():
         return self.cov_i(u.view(1, 1, n-2, n-2)).view(-1)
 
 
-class Transform_v2(Transform):
-    def __init__(self, index, p, device):
-        super().__init__(device)
-        self.p = p
-        self.index = index
-        self.direction = (index < p // 2).int()
-        d_list = [th.tensor([-1, 0]), th.tensor([1, 0]), th.tensor([0, -1]), th.tensor([0, 1])]
-        self.d_list = [((index + item) < p // 2).int() for item in d_list]
+def tridiag(a, b, c, n, device):  # n^2*n^2
+    return th.diag_embed(th.ones(n-1, device=device), -1) * a + th.diag_embed(th.ones(n, device=device), 0) * b + \
+        th.diag_embed(th.ones(n-1, device=device), 1) * c
 
-    @ th.no_grad()
-    def match(self, u_, u, a, m_type='id'):
-        index = self.index
-        direction = self.direction
-        p = self.p
 
-        correction1, correction2 = th.zeros_like(u_[0, :]), th.zeros_like(u_[0, :])  
-        if m_type == 'id':
-            task1 = dist.isend(u[self.d_list[0][0] - direction[0], :], (index[0] + index[1] * p - 1) % p ** 2)  # attention!
-            task2 = dist.isend(u[self.d_list[1][0] - direction[0] - 1, :], (index[0] + index[1] * p + 1) % p ** 2)
-        elif m_type == 're':
-            task1 = dist.isend(u[self.d_list[0][0] - direction[0], direction[1]::2].contiguous(), (index[0] + index[1] * p - 1) % p ** 2)
-            task2 = dist.isend(u[self.d_list[1][0] - direction[0] - 1, direction[1]::2].contiguous(), (index[0] + index[1] * p + 1) % p ** 2)
-        task3 = dist.irecv(correction1, (index[0] + index[1] * p - 1) % p**2)
-        task4 = dist.irecv(correction2, (index[0] + index[1] * p + 1) % p**2)
-        task1.wait()
-        task2.wait()
-        task3.wait()
-        task4.wait()
-
-        if index[0] != 0:
-            u_[0, :] += correction1 * a
-        if index[0] != p-1:
-            u_[-1, :] += correction2 * a
-
-        correction3, correction4 = th.zeros_like(u_[0, :]), th.zeros_like(u_[0, :])  
-        if m_type == 'id':
-            task1 = dist.isend(u[:, self.d_list[2][1] - direction[1]].contiguous(), (index[0] + index[1] * p - p) % p ** 2)
-            task2 = dist.isend(u[:, self.d_list[3][1] - direction[1] - 1].contiguous(), (index[0] + index[1] * p + p) % p ** 2)
-        elif m_type == 're':
-            task1 = dist.isend(u[direction[0]::2, self.d_list[2][1] - direction[1]].contiguous(), (index[0] + index[1] * p - p) % p ** 2)
-            task2 = dist.isend(u[direction[0]::2, self.d_list[3][1] - direction[1] - 1].contiguous(), (index[0] + index[1] * p + p) % p ** 2)
-        task3 = dist.irecv(correction4, (index[0] + index[1] * p - p) % p ** 2)  # attention!
-        task4 = dist.irecv(correction3, (index[0] + index[1] * p + p) % p ** 2)
-        task1.wait()
-        task2.wait()
-        task3.wait()
-        task4.wait()
-
-        if index[1] != 0:
-            u_[:, 0] += correction3 * a
-        if index[1] != p-1:
-            u_[:, -1] += correction4 * a
-
-        return u_
-
-    @ th.no_grad()
-    def laplace(self, u, n):  # n*n -> n*n
-        u_ = self.cov_l(u.view(1, 1, n, n)) * (n*self.p) ** 2
-        u = self.match(u_.view(n, n), u.view(n, n), - (n * self.p) ** 2)
-        return u.view(-1)
-
-    @ th.no_grad()
-    def smooth(self, u, b, m, n):  # n*n -> n*n
-        for _ in range(m):
-            u_ = self.cov_s(u.view(1, 1, n, n)).view(-1) 
-            u_ = self.match(u_.view(n, n), u.view(n, n), 0.25).view(-1)
-            u_ = u_ + b / ((n*self.p) ** 2 * self.diag)
-            u = self.w * u_ + (1 - self.w) * u.view(-1)
-        return u.view(-1)
-
-    @ th.no_grad()
-    def restriction(self, u, n):  # n*n -> n/2*n/2
-        direction = self.direction
-        pad = (1 - direction[0].item(), direction[0].item(), 1 - direction[1].item(), direction[1].item())
-        u_ = F.pad(u.view(n, n), pad=pad)  # better?
-        u_ = self.cov_r(u_.view(1, 1, n+1, n+1))
-        u = self.match(u_.view(n//2, n//2), u.view(n, n), 0.125, m_type='re')
-        return u.view(-1)
-
-    @ th.no_grad()
-    def interpolation(self, u, n):  # n/2*n/2 -> n*n
-        direction = self.direction
-        pad = (1 - direction[0].item(), direction[0].item(), 1 - direction[1].item(), direction[1].item())
-        u_ = th.kron(u.view(n//2, n//2), self.ones)
-        u_ = self.cov_i(u_.view(1, 1, n, n))
-        u = u_.view(n+1, n+1)[0 + pad[0]:n+1-pad[1], 0+pad[2]:n+1-pad[3]]  # attention!
-        # u = F.pad(u, (1, 1, 1, 1), 'constant', 0)  # mpi
-        return u.reshape(-1)
+def laplace(n, device):  # {h: n-1^2*n-1^2}
+    A_dict, i = {}, 4
+    while i <= n:
+        T, I, B = tridiag(-1, 4, -1, i-1, device), th.eye(i-1, device=device), tridiag(-1, 0, -1, i-1, device)
+        A = th.kron(I, T) + th.kron(B, I)
+        A_dict[i] = A * i ** 2  # attention!
+        i = i * 2
+    return A_dict
 
 
 # # cov_c = th.nn.Conv2d(1, 1, kernel_size=3, stride=1, bias=False)
@@ -209,81 +121,59 @@ class Transform_v2(Transform):
 
 
 if __name__ == "__main__":
-    from multigrid import MultiGrid
-    from input.func import origin_func, target_func
-    import os
-
     n, p = 8, 1
     device = th.device('cpu')
-    dist.init_process_group(backend='gloo')
 
-    device = th.device(device)
-    rank = os.environ.get("LOCAL_RANK")
-    rank = 0 if rank is None else int(rank)
-    index = th.tensor([rank % p, rank // p], device=device)
     
-    # MG_method = MultiGrid(index, p, device)
-    cond_method = condition(n, index, p, device)
-    b = cond_method(origin_func, target_func)  # condition(origin_func)
-    if p > 1:
-        transform = Transform_v2(index, p, device)
-    else:
-        transform = Transform(device)
-    b = transform.interpolation(b.view(-1), 2*n)
-    w = 2*n - 1 if p == 1 else 2*n
-    if rank == 0:
-        print(b.view(w, w))
-    
-    
-    # A = laplace(n, device)[n]
-    # transform = Transform(device)
+    A = laplace(n, device)[n]
+    transform = Transform(device)
 
-    # v = th.rand((n-1)**2)
-    # v1 = A @ v
-    # print(v1.view(n-1, n-1))
+    v = th.rand((n-1)**2)
+    v1 = A @ v
+    print(v1.view(n-1, n-1))
 
-    # v2 = transform.laplace(v, n)
-    # print(v2.view(n-1, n-1))
+    v2 = transform.laplace(v, n)
+    print(v2.view(n-1, n-1))
+
+    print((v1 - v2).view(n-1, n-1))
+
+    print('------------------------------------------------')
+
+    from smooth import separate, smooth
+
+    smooth_method = smooth(A)
+    b = th.rand((n-1)**2)
+
+    D, L, U = separate(A)
+    T = (1 / D) * (L + U)
+    print(T)
+    print((1 / D), b, D)
+
+    v1 = T @ v.view(-1) + (1 / D) * b
+    v1 = 2.0 / 3 * v1 + 1.0 / 3 * v
+    print(v1.view(n-1, n-1))
+
+    v2 = smooth_method(v, b, 1)
+    print(v2.view(n-1, n-1))
+
+    v3 = transform.smooth(v, b, 1, n)
+    print(v3.view(n-1, n-1))
 
     # print((v1 - v2).view(n-1, n-1))
 
-    # print('------------------------------------------------')
+    print('------------------------------------------------')
 
-    # from smooth import separate, smooth
+    v = th.tensor([[1, 2, 3], [2, 3, 4], [3, 4, 5]], dtype=th.float)
+    print(v, v.shape)
 
-    # smooth_method = smooth(A)
-    # b = th.rand((n-1)**2)
+    v_ = transform.laplace(v, n)
+    print(v_, v_.shape)
 
-    # D, L, U = separate(A)
-    # T = (1 / D) * (L + U)
-    # print(T)
-    # print((1 / D), b, D)
+    v = transform.interpolation(v, 2*n)
+    print(v.view(2*n-1, 2*n-1), v.shape)
 
-    # v1 = T @ v.view(-1) + (1 / D) * b
-    # v1 = 2.0 / 3 * v1 + 1.0 / 3 * v
-    # print(v1.view(n-1, n-1))
-
-    # v2 = smooth_method(v, b, 1)
-    # print(v2.view(n-1, n-1))
-
-    # v3 = transform.smooth(v, b, 1, n)
-    # print(v3.view(n-1, n-1))
-
-    # # print((v1 - v2).view(n-1, n-1))
-
-    # print('------------------------------------------------')
-
-    # v = th.tensor([[1, 2, 3], [2, 3, 4], [3, 4, 5]], dtype=th.float)
-    # print(v, v.shape)
-
-    # v_ = transform.laplace(v, n)
-    # print(v_, v_.shape)
-
-    # v = transform.interpolation(v, 2*n)
-    # print(v.view(2*n-1, 2*n-1), v.shape)
-
-    # v = transform.restriction(v, 2*n)
-    # print(v, v.shape)
+    v = transform.restriction(v, 2*n)
+    print(v, v.shape)
 
     # v = interpolation(v, n)
     # print(v, v.shape)

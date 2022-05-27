@@ -5,7 +5,7 @@ import time
 import sys
 import os
 
-from grid import condition, Transform, Transform_v2
+from grid import condition
 from multigrid import MultiGrid, FullMultiGrid
 from input.func import origin_func, target_func
 from smooth import smooth
@@ -22,26 +22,23 @@ if __name__ == "__main__":
     device = th.device(args.device)
     rank = os.environ.get("LOCAL_RANK")
     rank = 0 if rank is None else int(rank)
-    index = th.tensor([rank % p, rank // p], device=device)
+    index = th.tensor([rank % p, rank // p], device=device)  # x, y
+
     if p > 1:
         assert p ** 2 == int(os.environ.get("WORLD_SIZE"))
         dist.init_process_group(backend='gloo')
     
-    start = time.time()
     MG_method = MultiGrid(index, p, device)
     cond_method = condition(n, index, p, device)
     b = cond_method(origin_func, target_func)  # condition(origin_func)
-    print(time.time() - start)
 
-    start = time.time()
     w = n - 1 if p == 1 else n
     u = th.zeros((w)**2, device=device)
     
     u_list = []
-    for _ in range(5):
+    for _ in range(20):
         u = MG_method(u, b, n=n)
         u_list.append(u)
-    print(time.time() - start)
 
     if rank == 0:
         print(u.view(w, w)[:8, :8])

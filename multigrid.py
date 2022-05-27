@@ -1,7 +1,8 @@
 import torch as th
 
 # from smooth import smooth
-from grid import Transform, Transform_v2
+from grid import Transform
+from grid_v2 import Transform_v2
 
 
 class MultiGrid():
