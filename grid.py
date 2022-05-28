@@ -143,29 +143,29 @@ if __name__ == "__main__":
 
     print('------------------------------------------------')
 
-    from smooth import separate, smooth
+    # from smooth import separate, smooth
 
-    smooth_method = smooth(A)
-    b = th.rand((n-1)**2)
+    # smooth_method = smooth(A)
+    # b = th.rand((n-1)**2)
 
-    D, L, U = separate(A)
-    T = (1 / D) * (L + U)
-    print(T)
-    print((1 / D), b, D)
+    # D, L, U = separate(A)
+    # T = (1 / D) * (L + U)
+    # print(T)
+    # print((1 / D), b, D)
 
-    v1 = T @ v.view(-1) + (1 / D) * b
-    v1 = 2.0 / 3 * v1 + 1.0 / 3 * v
-    print(v1.view(n-1, n-1))
+    # v1 = T @ v.view(-1) + (1 / D) * b
+    # v1 = 2.0 / 3 * v1 + 1.0 / 3 * v
+    # print(v1.view(n-1, n-1))
 
-    v2 = smooth_method(v, b, 1)
-    print(v2.view(n-1, n-1))
+    # v2 = smooth_method(v, b, 1)
+    # print(v2.view(n-1, n-1))
 
-    v3 = transform.smooth(v, b, 1, n)
-    print(v3.view(n-1, n-1))
+    # v3 = transform.smooth(v, b, 1, n)
+    # print(v3.view(n-1, n-1))
 
-    # print((v1 - v2).view(n-1, n-1))
+    # # print((v1 - v2).view(n-1, n-1))
 
-    print('------------------------------------------------')
+    # print('------------------------------------------------')
 
     v = th.tensor([[1, 2, 3], [2, 3, 4], [3, 4, 5]], dtype=th.float)
     print(v, v.shape)

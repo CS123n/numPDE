@@ -15,14 +15,15 @@ class MultiGrid():
 
         if p == 1:
             self.transform = Transform(device)
-        elif p == 2:
-            self.transform_v2 = Transform_v2(index, p, device)
         else:
             self.transform = Transform(device)
             self.transform_v2 = Transform_v2(index, p, device)
 
     def __call__(self, u, f, m1=1, m2=1, n=None):
-        return self.compute(u, f, m1=m1, m2=m2, n=n, p=self.p)
+        u = self.compute(u, f, m1=m1, m2=m2, n=n, p=self.p)
+        if self.p != 1:
+            u = self.transform_v2.correction(u, n)
+        return u
 
     def compute(self, u, f, m1, m2, n, p=1):
         if p == 1:
@@ -30,15 +31,13 @@ class MultiGrid():
         else:
             tran = self.transform_v2
 
-        if n == 4 and p == 1:
+        if n == 4 and p == 1:  # attention!
             return tran.smooth(u, f, m1+m2, n)
-        elif n == 2 and p == 2:
-            return tran.smooth(u, f, m1+m2, n)
-        elif n == 1:
-            f = tran.collection(f)
+        elif n == 2:  # attention!
+            f = tran.collection(f, n)
             if self.rank == 0:
-                u = self.compute(th.zeros_like(f), f, m1=m1, m2=m2, n=self.p, p=1)
-            u = tran.distribution(u)
+                u = self.compute(th.zeros_like(f), f, m1=m1, m2=m2, n=n*self.p, p=1)
+            u = tran.distribution(u, n)
 
             return u
         else:

@@ -8,17 +8,16 @@ import os
 from grid import condition
 from multigrid import MultiGrid, FullMultiGrid
 from input.func import origin_func, target_func
-from smooth import smooth
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--n', '-n', type=int, default=16)
-    parser.add_argument('--p', '-p', type=int, default=1)
+    parser.add_argument('--process', '-p', type=int, default=1)
     parser.add_argument('--device', type=str, default='cpu')
     args = parser.parse_args()
 
-    n, p = args.n // args.p, args.p
+    n, p = args.n // args.process, args.process
     device = th.device(args.device)
     rank = os.environ.get("LOCAL_RANK")
     rank = 0 if rank is None else int(rank)
@@ -35,13 +34,16 @@ if __name__ == "__main__":
     w = n - 1 if p == 1 else n
     u = th.zeros((w)**2, device=device)
     
-    u_list = []
-    for _ in range(20):
+    # u_list = []
+    for _ in range(25):
         u = MG_method(u, b, n=n)
-        u_list.append(u)
+        # u_list.append(u)
 
     if rank == 0:
         print(u.view(w, w)[:8, :8])
+
+    # if rank == 3:
+    #     print(u.view(w, w)[0:8, 0:8])
 
     # e_list = [th.norm(u_list[i] - u_t) for i in range(len(u_list))]
     # print(e_list)
