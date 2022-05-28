@@ -36,7 +36,7 @@ if __name__ == "__main__":
     u = th.zeros((w)**2, device=device)
     
     u_list = []
-    for _ in range(20):
+    for _ in range(10):
         u = MG_method(u, b, n=n)
         u_list.append(u)
 

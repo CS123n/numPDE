@@ -1,6 +1,7 @@
 import torch as th
 import torch.nn.functional as F
 import torch.distributed as dist
+import sys
 
 from grid import Transform
 
@@ -8,6 +9,11 @@ from grid import Transform
 class Transform_v2(Transform):
     def __init__(self, index, p, device):
         super().__init__(device)
+
+        self.cov_r = th.nn.Conv2d(1, 1, kernel_size=3, padding=1, bias=False, device=device)
+        weight = 0.125 * th.tensor([[[[0, 1, 0], [1, 4, 1], [0, 1, 0]]]], device=device)  # attention!
+        self.cov_r.weight = th.nn.Parameter(weight)  
+
         self.p = p
         self.index = index
         self.direction = (index < p // 2).int()
@@ -61,8 +67,31 @@ class Transform_v2(Transform):
         return u_
 
     @ th.no_grad()
-    def collection():
-        pass
+    def collection(self, u_):  # 1 -> p*p
+        p = self.p
+        if self.index[0] + self.index[1] == 0:
+            u_list = [th.zeros_like(u_) for _ in range(p**2)]
+            dist.gather(u_, u_list)
+            u = th.cat(u_list, dim=0).view(p, p)
+            # print(u)
+            u = u[th.arange(p)!=p//2][:, th.arange(p)!=p//2]
+            return u.view(-1)
+        else:
+            dist.gather(u_)
+            return None
+
+    @ th.no_grad()
+    def distribution(self, u):
+        p = self.p
+        u_ = th.zeros(1)
+        if self.index[0] + self.index[1] == 0:
+            ex_list = list(range(p//2)) + list(range(p//2-1, p-1))
+            u_list = u.view(p-1, p-1)[ex_list][:, ex_list].view(-1)
+            u_list = [th.tensor([item.item()]) for item in u_list]  # attention!
+            dist.scatter(u_, u_list)
+        else:
+            dist.scatter(u_)
+        return u_
 
     @ th.no_grad()
     def laplace(self, u, n):  # n*n -> n*n
@@ -80,13 +109,15 @@ class Transform_v2(Transform):
         return u.view(-1)
 
     @ th.no_grad()
-    def restriction(self, u, n):  # n*n -> n/2*n/2
-        direction = self.direction
+    def restriction(self, u, n):  # n*n -> n/2*n/2  # problem?
+        direction = self.direction  
         pad = (1 - direction[0].item(), direction[0].item(), 1 - direction[1].item(), direction[1].item())
-        u_ = F.pad(u.view(n, n), pad=pad)  # better?
-        u_ = self.cov_r(u_.view(1, 1, n+1, n+1))
-        u = self.match(u_.view(n//2, n//2), u.view(n, n), 0.125, m_type='re')
-        return u.view(-1)
+        # u_ = F.pad(u.view(n, n), pad=pad)  # better?
+        u_ = self.cov_r(u.view(1, 1, n, n))
+        u = self.match(u_.view(n, n), u.view(n, n), 0.125, m_type='id')
+        u = u[direction[0]::2, direction[1]::2]
+        # u = u_
+        return u.reshape(-1)
 
     @ th.no_grad()
     def interpolation(self, u, n):  # n/2*n/2 -> n*n
@@ -108,7 +139,7 @@ if __name__ == "__main__":
     import os
 
 
-    n, p = 4, 2  # 4, 4
+    n, p = 1, 4  # 4, 4
     device = th.device('cpu')
     dist.init_process_group(backend='gloo')
 
@@ -125,51 +156,159 @@ if __name__ == "__main__":
     cond_method_v2 = condition(n, index, p, device)
     b_v2 = cond_method_v2(origin_func, target_func)
 
-    result = transform.laplace(b, n*p)
-    result_v2 = transform_v2.laplace(b_v2, n)
+    if rank == 0:
+        print(b.view(n*p-1, n*p-1))
+
+    for _ in range(1):
+        b_v2_ = transform_v2.collection(b_v2)
+        b_v2 = transform_v2.distribution(b_v2_)
 
     if rank == 0:
-        print('rank 0:')
-        print(result.view(n*p-1, n*p-1)[:n, :n])
-        print(result_v2.view(n, n))
+        print(b_v2.view(n, n))
 
-    dist.barrier()
+    # u = th.zeros_like(b)
+    # u_v2 = th.zeros_like(b_v2)
 
-    if rank == p*p-1:
-        print('rank p*p-1:')
-        print(result.view(n*p-1, n*p-1)[-n:, -n:])
-        print(result_v2.view(n, n))
+    # u = transform.smooth(u, b, 40, n*p)
+    # u_v2 = transform_v2.smooth(u_v2, b_v2, 40, n)
 
-    dist.barrier()
+    # # r = b - transform.laplace(u, n*p)
+    # # r_v2 = b_v2 - transform_v2.laplace(u_v2, n)
+
+    # for _ in range(20):
+
+    #     r = transform.restriction(b, n*p)
+    #     r_v2 = transform_v2.restriction(b_v2, n)
+
+    #     # r = transform.restriction(r, n*p//2)
+    #     # r_v2 = transform_v2.restriction(r_v2, n//2)
+
+    #     # r = transform.interpolation(r, n*p//2)
+    #     # r_v2 = transform_v2.interpolation(r_v2, n//2)
+
+    #     r = transform.interpolation(r, n*p)
+    #     r_v2 = transform_v2.interpolation(r_v2, n)
+
+
+    # r2 = transform.smooth(r, r, 2, n*p//2)
+    # r2_v2 = transform_v2.smooth(r_v2, r_v2, 2, n//2)
+
+    # r = transform.interpolation(r, n*p)
+    # r_v2 = transform_v2.interpolation(r_v2, n)
+
+    # r2 = transform.interpolation(r2, n*p)
+    # r2_v2 = transform_v2.interpolation(r2_v2, n)
+
+    # if rank == 1:
+    #     print('rank 0:')
+    #     print(u.view(n*p-1, n*p-1)[-n:, :n])
+    #     print(u_v2.view(n, n))
+    #     print(u.view(n*p-1, n*p-1)[-n:, :n] - u_v2.view(n, n))
+
+    # dist.barrier()
+
+    # if rank == 2:
+    #     print('rank p*p-1:')
+    #     print(u.view(n*p-1, n*p-1)[:n, -n:])
+    #     print(u_v2.view(n, n))
+    #     print(u.view(n*p-1, n*p-1)[:n, -n:] - u_v2.view(n, n))
+
+    # dist.barrier()
+
+    # ww = 1
+    # if rank == 0:
+    #     print('rank 0:')
+    #     print(r.view(n*p//ww-1, n*p//ww-1)[:n//ww, :n//ww])
+    #     print(r_v2.view(n//ww, n//ww))
+    #     print(r.view(n*p//ww-1, n*p//ww-1)[:n//ww, :n//ww] - r_v2.view(n//ww, n//ww))
+
+    # dist.barrier()
+
+    # if rank == p*p-1:
+    #     print('rank p*p-1:')
+    #     print(r.view(n*p//ww-1, n*p//ww-1)[-n//ww:, -n//ww:])
+    #     print(r_v2.view(n//ww, n//ww))
+    #     print(r.view(n*p//ww-1, n*p//ww-1)[-n//ww:, -n//ww:] - r_v2.view(n//ww, n//ww))
+
+    # dist.barrier()
+
+    # if rank == 0:
+    #     print('rank 0:')
+    #     print(r2.view(n*p//2-1, n*p//2-1)[:n//2, :n//2])
+    #     print(r2_v2.view(n//2, n//2))
+
+    # dist.barrier()
+
+    # if rank == p*p-1:
+    #     print('rank p*p-1:')
+    #     print(r2.view(n*p//2-1, n*p//2-1)[-n//2:, -n//2:])
+    #     print(r2_v2.view(n//2, n//2))
+
+    # dist.barrier()
+
+    # result = transform.laplace(b, n*p)
+    # result_v2 = transform_v2.laplace(b_v2, n)
+
+    # if rank == 0:
+    #     print('rank 0:')
+    #     print(result.view(n*p-1, n*p-1)[:n, :n])
+    #     print(result_v2.view(n, n))
+
+    # dist.barrier()
+
+    # if rank == p*p-1:
+    #     print('rank p*p-1:')
+    #     print(result.view(n*p-1, n*p-1)[-n:, -n:])
+    #     print(result_v2.view(n, n))
+
+    # dist.barrier()
+
+
+    # result = transform.smooth(result, b, 10, n*p)
+    # result_v2 = transform_v2.smooth(result_v2, b_v2, 10, n)
+
+    # if rank == 0:
+    #     print('rank 0:')
+    #     print(result.view(n*p-1, n*p-1)[:n, :n])
+    #     print(result_v2.view(n, n))
+
+    # dist.barrier()
+
+    # if rank == p*p-1:
+    #     print('rank p*p-1:')
+    #     print(result.view(n*p-1, n*p-1)[-n:, -n:])
+    #     print(result_v2.view(n, n))
+
+    # dist.barrier()
     
-    result = transform.restriction(b, n*p)
-    result_v2 = transform_v2.restriction(b_v2, n)
+    # result = transform.restriction(b, n*p)
+    # result_v2 = transform_v2.restriction(b_v2, n)
 
-    if rank == 0:
-        print('rank 0:')
-        print(result.view(n*p//2-1, n*p//2-1)[:n//2, :n//2])
-        print(result_v2.view(n//2, n//2))
+    # if rank == 0:
+    #     print('rank 0:')
+    #     print(result.view(n*p//2-1, n*p//2-1)[:n//2, :n//2])
+    #     print(result_v2.view(n//2, n//2))
 
-    dist.barrier()
+    # dist.barrier()
 
-    if rank == p*p-1:
-        print('rank p*p-1:')
-        print(result.view(n*p//2-1, n*p//2-1)[-n//2:, -n//2:])
-        print(result_v2.view(n//2, n//2))
+    # if rank == p*p-1:
+    #     print('rank p*p-1:')
+    #     print(result.view(n*p//2-1, n*p//2-1)[-n//2:, -n//2:])
+    #     print(result_v2.view(n//2, n//2))
 
-    dist.barrier()
+    # dist.barrier()
 
-    result = transform.interpolation(result, n*p)
-    result_v2 = transform_v2.interpolation(result_v2, n)
+    # result = transform.interpolation(result, n*p)
+    # result_v2 = transform_v2.interpolation(result_v2, n)
 
-    if rank == 0:
-        print('rank 0:')
-        print(result.view(n*p-1, n*p-1)[:n, :n])
-        print(result_v2.view(n, n))
+    # if rank == 0:
+    #     print('rank 0:')
+    #     print(result.view(n*p-1, n*p-1)[:n, :n])
+    #     print(result_v2.view(n, n))
 
-    dist.barrier()
+    # dist.barrier()
 
-    if rank == p*p-1:
-        print('rank p*p-1:')
-        print(result.view(n*p-1, n*p-1)[-n:, -n:])
-        print(result_v2.view(n, n))
+    # if rank == p*p-1:
+    #     print('rank p*p-1:')
+    #     print(result.view(n*p-1, n*p-1)[-n:, -n:])
+    #     print(result_v2.view(n, n))

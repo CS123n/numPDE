@@ -1,4 +1,5 @@
 import torch as th
+import sys
 
 # from smooth import smooth
 from grid import Transform
@@ -9,31 +10,43 @@ class MultiGrid():
     def __init__(self, index, p, device):
         # self.A, self.n = laplace(n, device), n
         # self.smooth_method = {item: smooth(self.A[item]) for item in self.A}
-        if p > 1:
-            self.transform = Transform_v2(index, p, device)
+        self.p = p
+        self.index = index
+        if p == 1:
+            self.transform = Transform(device)
         else:
             self.transform = Transform(device)
+            self.transform_v2 = Transform_v2(index, p, device)
 
     def __call__(self, u, f, m1=1, m2=1, n=None):
-        return self.compute(u, f, m1=m1, m2=m2, n=n)
+        return self.compute(u, f, m1=m1, m2=m2, n=n, p=self.p)
 
-    def compute(self, u, f, m1, m2, n):
-        tran = self.transform
-        n = n if n else self.n
+    def compute(self, u, f, m1, m2, n, p=1):
+        if p == 1:
+            tran = self.transform
+        else:
+            tran = self.transform_v2
 
-        u = tran.smooth(u, f, m1, n)
-        if n == 4:
+        if n == 4 and p == 1:
+            return tran.smooth(u, f, m1+m2, n)
+        elif n == 2 and p == 2:
+            return tran.smooth(u, f, m1+m2, n)
+        elif n == 1:
+            f = tran.collection(f)
+            if self.index[0] + self.index[1] == 0:
+                u = self.compute(th.zeros_like(f), f, m1=m1, m2=m2, n=self.p, p=1)
+            u = tran.distribution(u)
             # return th.inverse(A) @ f  # better?
-            u = tran.smooth(u, f, m2, n)
             return u
+        else:
+            u = tran.smooth(u, f, m1, n)
+            r = f - tran.laplace(u, n)
+            r2 = tran.restriction(r, n)
+            e2 = self.compute(th.zeros_like(r2), r2, m1=m1, m2=m2, n=n//2, p=self.p)  # attention!
+            u = u + tran.interpolation(e2, n)
+            u = tran.smooth(u, f, m2, n)
 
-        r = f - tran.laplace(u, n)
-        r2 = tran.restriction(r, n)
-        e2 = self.compute(th.zeros_like(r2), r2, m1=m1, m2=m2, n=n//2)  # attention!
-        u = u + tran.interpolation(e2, n)
-        u = tran.smooth(u, f, m2, n)
-
-        return u
+            return u
 
 
 class FullMultiGrid(MultiGrid):

@@ -77,7 +77,8 @@ class Transform():
     @ th.no_grad()
     def smooth(self, u, b, m, n):  # n-1*n-1 -> n-1*n-1
         for _ in range(m):
-            u_ = self.cov_s(u.view(1, 1, n-1, n-1)).view(-1) + b / (n ** 2 * self.diag)
+            u_ = self.cov_s(u.view(1, 1, n-1, n-1)).view(-1)
+            u_ = u_ + b / (n ** 2 * self.diag)
             u = self.w * u_ + (1 - self.w) * u.view(-1)
         return u
 
