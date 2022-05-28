@@ -15,8 +15,6 @@ def condition(n, index, p, device):  # n-1*n-1
         @ th.no_grad()
         def method(origin_func, target_func):
             b = origin_func(gridx[1:-1, 1:-1], gridy[1:-1, 1:-1])
-            # u = target_func(gridx[1:-1, 1:-1], gridy[1:-1, 1:-1])
-            # b = vmap(origin_func)(grid[:, 1:-1, 1:-1]).view(n-1, n-1)
 
             b[0, :] += target_func(gridx[0, 1:-1], gridy[0, 1:-1]) * n ** 2
             b[:, 0] += target_func(gridx[1:-1, 0], gridy[1:-1, 0]) * n ** 2
@@ -24,6 +22,7 @@ def condition(n, index, p, device):  # n-1*n-1
             b[:, -1] += target_func(gridx[1:-1, -1], gridy[1:-1, -1]) * n ** 2
     
             return b.view(-1)
+
         return method
     else:
         direction = index < p // 2
@@ -46,6 +45,7 @@ def condition(n, index, p, device):  # n-1*n-1
                 b[:, -1] += target_func(gridx[:, -1], th.ones(n, device=device)) * (n*p) ** 2
 
             return b.view(-1)
+
         return method
 
 
@@ -80,6 +80,7 @@ class Transform():
             u_ = self.cov_s(u.view(1, 1, n-1, n-1)).view(-1)
             u_ = u_ + b / (n ** 2 * self.diag)
             u = self.w * u_ + (1 - self.w) * u.view(-1)
+
         return u
 
     @ th.no_grad()
@@ -89,7 +90,7 @@ class Transform():
     @ th.no_grad()
     def interpolation(self, u, n):  # n/2-1*n/2-1 -> n-1*n-1
         u = th.kron(u.view(n//2-1, n//2-1), self.ones)
-        # u = F.pad(u, (1, 1, 1, 1), 'constant', 0)  # mpi
+
         return self.cov_i(u.view(1, 1, n-2, n-2)).view(-1)
 
 
@@ -100,11 +101,13 @@ def tridiag(a, b, c, n, device):  # n^2*n^2
 
 def laplace(n, device):  # {h: n-1^2*n-1^2}
     A_dict, i = {}, 4
+    
     while i <= n:
         T, I, B = tridiag(-1, 4, -1, i-1, device), th.eye(i-1, device=device), tridiag(-1, 0, -1, i-1, device)
         A = th.kron(I, T) + th.kron(B, I)
         A_dict[i] = A * i ** 2  # attention!
         i = i * 2
+
     return A_dict
 
 

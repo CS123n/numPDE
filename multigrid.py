@@ -10,10 +10,13 @@ class MultiGrid():
     def __init__(self, index, p, device):
         # self.A, self.n = laplace(n, device), n
         # self.smooth_method = {item: smooth(self.A[item]) for item in self.A}
-        self.p = p
         self.index = index
+        self.rank, self.p = index[0] + index[1] * p, p
+
         if p == 1:
             self.transform = Transform(device)
+        elif p == 2:
+            self.transform_v2 = Transform_v2(index, p, device)
         else:
             self.transform = Transform(device)
             self.transform_v2 = Transform_v2(index, p, device)
@@ -33,16 +36,16 @@ class MultiGrid():
             return tran.smooth(u, f, m1+m2, n)
         elif n == 1:
             f = tran.collection(f)
-            if self.index[0] + self.index[1] == 0:
+            if self.rank == 0:
                 u = self.compute(th.zeros_like(f), f, m1=m1, m2=m2, n=self.p, p=1)
             u = tran.distribution(u)
-            # return th.inverse(A) @ f  # better?
+
             return u
         else:
             u = tran.smooth(u, f, m1, n)
             r = f - tran.laplace(u, n)
             r2 = tran.restriction(r, n)
-            e2 = self.compute(th.zeros_like(r2), r2, m1=m1, m2=m2, n=n//2, p=self.p)  # attention!
+            e2 = self.compute(th.zeros_like(r2), r2, m1=m1, m2=m2, n=n//2, p=p)  # attention!
             u = u + tran.interpolation(e2, n)
             u = tran.smooth(u, f, m2, n)
 
