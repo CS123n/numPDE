@@ -42,6 +42,7 @@ if __name__ == "__main__":
     if rank == 0:
         print(u.view(w, w)[:8, :8])
 
+
     # if rank == 3:
     #     print(u.view(w, w)[0:8, 0:8])
 
